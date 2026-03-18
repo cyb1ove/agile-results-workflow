@@ -210,42 +210,44 @@ async function fetchATLTypes() {
 }
 
 function getHotSpotProjects(allTypes, parentFolders = Object.values(HOT_SPOT_FOLDERS)) {
-  const [groupTypes, otherTypes] = allTypes.reduce((acc, type) => {
-    if (type.group) {
-      acc[0].push(type);
-    } else {
-      acc[1].push(type);
-    }
-    return acc;
-  }, [[], []]);
+  const byGuid = {};
+  allTypes.forEach(type => { byGuid[type.guid] = type; });
 
-  const graphOfTypes = groupTypes.reduce((acc, type) => {
-    const { guid, ...restType } = type;
-    acc[guid] = { ...restType, children: [] };
-    return acc;
-  }, {});
-
-  otherTypes.forEach(type => {
-    if (graphOfTypes[type.parent]) {
-      graphOfTypes[type.parent].children.push(type);
+  const childrenOf = {};
+  allTypes.forEach(type => {
+    if (type.parent && byGuid[type.parent]) {
+      (childrenOf[type.parent] ??= []).push(type);
     }
   });
+
+  const chains = [];
+  function collectChains(node, path) {
+    const currentPath = [...path, node.name];
+    const children = childrenOf[node.guid];
+    if (!children) {
+      chains.push(currentPath);
+    } else {
+      children.forEach(child => collectChains(child, currentPath));
+    }
+  }
+
+  const roots = allTypes.filter(t => !t.parent || !byGuid[t.parent]);
+  roots.forEach(root => collectChains(root, []));
+
+  const loggerToObsidianFolderAccordings = {
+    [HOT_SPOT_FOLDERS.WORK]: OBSIDIAN_PARA_FOLDERS.PROJECTS,
+    [HOT_SPOT_FOLDERS.PERSONAL]: OBSIDIAN_PARA_FOLDERS.PROJECTS,
+    [HOT_SPOT_FOLDERS.LIFE]: OBSIDIAN_PARA_FOLDERS.LIFE_AREAS,
+  };
 
   const projectNames = [];
 
   for (const parentFolder of parentFolders) {
-    const loggerToObsidianFolderAccordings = {
-      [HOT_SPOT_FOLDERS.WORK]: OBSIDIAN_PARA_FOLDERS.PROJECTS,
-      [HOT_SPOT_FOLDERS.PERSONAL]: OBSIDIAN_PARA_FOLDERS.PROJECTS,
-      [HOT_SPOT_FOLDERS.LIFE]: OBSIDIAN_PARA_FOLDERS.LIFE_AREAS,
-    }
+    const matchingChains = chains.filter(chain => chain[0] === parentFolder);
+    const prefix = HOT_SPOT_PREFIXES[parentFolder];
 
-    const parentTypes = Object.values(graphOfTypes)
-      .find(type => type.name === parentFolder)
-      .children;
-
-    const parentProjects = parentTypes.map(type => ({
-      name: `${HOT_SPOT_PREFIXES[parentFolder]}${sanitize(type.name)}`,
+    const parentProjects = matchingChains.map(chain => ({
+      name: prefix + chain.slice(1).map(sanitize).join(". "),
       path: loggerToObsidianFolderAccordings[parentFolder],
     }));
 
@@ -582,7 +584,7 @@ async function main() {
   // 2. Create folders in Obsidian
   for (const hotSpotProject of hotSpotProjects) {
     if (!hotSpotProject.name) {
-      console.log(`⚠️ Пропуск: невозможно создать имя папки из "${hotSpotProject.name}"`);
+      console.log(`⚠️ Skip: folder name is empty: "${hotSpotProject.name}"`);
       continue;
     }
 
@@ -591,14 +593,14 @@ async function main() {
     const isFolderExists = await folderExists(obsidianFolderPath);
     
     if (isFolderExists) {
-      console.log(`⚠️ Пропуск: папка "${obsidianFolderPath}" уже существует`);
+      console.log(`⚠️ Skip: folder "${obsidianFolderPath}" already exists`);
     } else {
       const result = await createFolder(obsidianFolderPath);
 
       if (result.ok) {
-        console.log(`✅ Папка "${obsidianFolderPath}" создана`);
+        console.log(`✅ Folder "${obsidianFolderPath}" created`);
       } else {
-        console.log(`❌ Ошибка при создании папки "${obsidianFolderPath}": ${result.message}`);
+        console.log(`❌ Error creating folder "${obsidianFolderPath}": ${result.message}`);
       }
     }
   }
@@ -616,11 +618,11 @@ async function main() {
   for (const folder of obsoleteHotSpotFolders) {
     const result = await prefixFolder(folder.name, folder.path);
     if (result.ok && !result.skipped) {
-      console.log(`✅ Папка "${folder.name}" переименована в "${result.newFolderName}"`);
+      console.log(`✅ Folder "${folder.name}" renamed to "${result.newFolderName}"`);
     } else if (result.ok && result.skipped) {
-      console.log(`⏭ Папка "${folder.name}" уже переименована ранее`);
+      console.log(`⏭ Folder "${folder.name}" already renamed`);
     } else {
-      console.log(`❌ Ошибка при переименовании папки "${folder.name}": ${result.error}`);
+      console.log(`❌ Error renaming folder "${folder.name}": ${result.error}`);
     }
   }
 
