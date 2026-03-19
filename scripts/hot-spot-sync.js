@@ -1,4 +1,10 @@
-// Load config from config.local.js (gitignored) or environment variables
+#!/usr/bin/env node
+// @raycast.schemaVersion 1
+// @raycast.title Hot Spot Sync
+// @raycast.mode fullOutput
+// @raycast.packageName Hot Spot Sync
+// @raycast.icon 🔄
+
 let CONFIG = {
   GITHUB_OWNER: "cyb1ove",
   GITHUB_REPO: "obsidian",
