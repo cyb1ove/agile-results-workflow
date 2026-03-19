@@ -41,9 +41,32 @@ const HOT_SPOT_PREFIXES = {
 
 const ARCHIVE_HOT_SPOT_PREFIX = "(DEL) ";
 
+
 // UTILITY FUNCTIONS
 
 // Universal storage — works in Node.js and Scriptable
+
+function getStoragePath() {
+  if (isScriptable) return null; // Scriptable использует Keychain, файл не нужен
+
+  const os = require("os");
+  const path = require("path");
+
+  // Termux на Android
+  if (process.env.TERMUX_VERSION || 
+      process.env.HOME?.includes("com.termux")) {
+    return "/data/data/com.termux/files/home/.storage.json";
+  }
+
+  // Windows
+  if (process.platform === "win32") {
+    return path.join(process.env.APPDATA || os.homedir(), ".storage.json");
+  }
+
+  // macOS / Linux — стандартный домашний каталог
+  return path.join(os.homedir(), ".storage.json");
+}
+
 const isScriptable = typeof Keychain !== "undefined";
 
 function storageSet(key, value) {
@@ -52,9 +75,9 @@ function storageSet(key, value) {
   } else {
     const fs = require("fs");
     let store = {};
-    try { store = JSON.parse(fs.readFileSync(".storage.json", "utf8")); } catch(e) {}
+    try { store = JSON.parse(fs.readFileSync(getStoragePath(), "utf8")); } catch(e) {}
     store[key] = value;
-    fs.writeFileSync(".storage.json", JSON.stringify(store));
+    fs.writeFileSync(getStoragePath(), JSON.stringify(store));
   }
 }
 
@@ -64,7 +87,7 @@ function storageGet(key) {
   } else {
     const fs = require("fs");
     try {
-      const store = JSON.parse(fs.readFileSync(".storage.json", "utf8"));
+      const store = JSON.parse(fs.readFileSync(getStoragePath(), "utf8"));
       return store[key] || null;
     } catch(e) { return null; }
   }
@@ -76,9 +99,9 @@ function storageRemove(key) {
   } else {
     const fs = require("fs");
     try {
-      const store = JSON.parse(fs.readFileSync(".storage.json", "utf8"));
+      const store = JSON.parse(fs.readFileSync(getStoragePath(), "utf8"));
       delete store[key];
-      fs.writeFileSync(".storage.json", JSON.stringify(store));
+      fs.writeFileSync(getStoragePath(), JSON.stringify(store));
     } catch(e) {}
   }
 }
