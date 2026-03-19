@@ -670,7 +670,6 @@ async function main() {
   } catch(e) {
     throw new Error(e.message);
   }
-  console.log(projects);
   console.log(`  📂 Projects in TickTick: ${projects.length}`);
 
   // Map of projects: name → object
