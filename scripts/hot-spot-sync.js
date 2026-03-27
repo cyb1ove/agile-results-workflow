@@ -251,9 +251,9 @@ function getHotSpotProjects(allTypes, parentFolders = Object.values(HOT_SPOT_FOL
 
   const chains = [];
   function collectChains(node, path) {
-    const currentPath = [...path, node.name];
+    const currentPath = [...path, node];
     const children = childrenOf[node.guid];
-    if (!children) {
+    if (!children || children.length === 0) {
       chains.push(currentPath);
     } else {
       children.forEach(child => collectChains(child, currentPath));
@@ -272,19 +272,25 @@ function getHotSpotProjects(allTypes, parentFolders = Object.values(HOT_SPOT_FOL
   const projectNames = [];
 
   for (const parentFolder of parentFolders) {
-    const matchingChains = chains.filter(chain => chain[0] === parentFolder);
+    const matchingChains = chains.filter(chain => chain[0]?.name === parentFolder);
     const prefix = HOT_SPOT_PREFIXES[parentFolder];
 
-    const parentProjects = matchingChains.map(chain => ({
-      name: prefix + chain.slice(1).map(sanitize).join(". "),
-      path: loggerToObsidianFolderAccordings[parentFolder],
-    }));
+    const parentProjects = matchingChains.map(chain => {
+      const leaf = chain[chain.length - 1];
+      return {
+        guid: leaf.guid,
+        name: prefix + chain.slice(1).map(item => sanitize(item.name)).join(". "),
+        path: loggerToObsidianFolderAccordings[parentFolder],
+        parentFolder,
+      };
+    });
 
     projectNames.push(...parentProjects);
   }
 
   return projectNames;
 }
+
 
 // GITHUB FUNCTIONS
 
@@ -545,47 +551,369 @@ function clearTickTickToken() {
 
 // TickTick API FUNCTIONS
 
-function ttHeaders(token) {
-  return { "Authorization": `Bearer ${token}` };
+// function ttHeaders(token) {
+//   return { "Authorization": `Bearer ${token}` };
+// }
+
+// function ttJsonHeaders(token) {
+//   return { ...ttHeaders(token), "Content-Type": "application/json" };
+// }
+
+// async function fetchTickTickProjects(token) {
+//   const { json } = await httpRequest(
+//     "https://api.ticktick.com/open/v1/project",
+//     "GET",
+//     ttHeaders(token)
+//   );
+
+//   if (!Array.isArray(json)) {
+//     clearTickTickToken();
+//     throw new Error("Error getting projects (token reset, restart script)");
+//   }
+//   return json;
+// }
+
+// async function createTickTickProject(name, token) {
+//   const { json } = await httpRequest(
+//     "https://api.ticktick.com/open/v1/project",
+//     "POST",
+//     ttJsonHeaders(token),
+//     JSON.stringify({ name })
+//   );
+//   return json?.id ? json : null;
+// }
+
+
+// async function deleteTickTickProject(projectId, token) {
+//   const { ok, status } = await httpRequest(
+//     `https://api.ticktick.com/open/v1/project/${projectId}`,
+//     "DELETE",
+//     ttHeaders(token)
+//   );
+//   return ok;
+// }
+
+// AMAZING MARVIN FUNCTIONS
+
+const MARVIN_API_BASE = "https://serv.amazingmarvin.com/api";
+const MARVIN_CATEGORY_NOTE_PREFIX = "ATL_HOT_SPOT_ROOT:";
+const MARVIN_PROJECT_NOTE_PREFIX = "ATL_SYNC:";
+
+function marvinHeaders() {
+  return {
+    "X-API-Token": CONFIG.MARVIN_API_TOKEN,
+    "Content-Type": "application/json",
+  };
 }
 
-function ttJsonHeaders(token) {
-  return { ...ttHeaders(token), "Content-Type": "application/json" };
+function marvinFullHeaders() {
+  return {
+    "X-Full-Access-Token": CONFIG.MARVIN_FULL_ACCESS_TOKEN,
+    "Content-Type": "application/json",
+  };
 }
 
-async function fetchTickTickProjects(token) {
-  const { json } = await httpRequest(
-    "https://api.ticktick.com/open/v1/project",
+function slugify(str) {
+  return String(str)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 60);
+}
+
+function getManagedCategoryId(folderName) {
+  return `atl_cat_${slugify(folderName)}`;
+}
+
+function getManagedProjectId(guid) {
+  return `atl_proj_${guid}`;
+}
+
+function getManagedCategoryNote(folderName) {
+  return `${MARVIN_CATEGORY_NOTE_PREFIX}${folderName}`;
+}
+
+function getManagedProjectNote(guid) {
+  return `${MARVIN_PROJECT_NOTE_PREFIX}${guid}`;
+}
+
+function parseManagedProjectGuid(item) {
+  const note = item?.note || "";
+  if (!note.startsWith(MARVIN_PROJECT_NOTE_PREFIX)) return null;
+  return note.slice(MARVIN_PROJECT_NOTE_PREFIX.length).trim() || null;
+}
+
+async function fetchMarvinCategories() {
+  const { json, status, text } = await httpRequest(
+    `${MARVIN_API_BASE}/categories`,
     "GET",
-    ttHeaders(token)
+    marvinHeaders()
   );
 
   if (!Array.isArray(json)) {
-    clearTickTickToken();
-    throw new Error("Error getting projects (token reset, restart script)");
+    throw new Error(`Error getting Marvin categories. status=${status}, text=${text}`);
   }
+
   return json;
 }
 
-async function createTickTickProject(name, token) {
-  const { json } = await httpRequest(
-    "https://api.ticktick.com/open/v1/project",
+async function fetchMarvinChildren(parentId) {
+  const { json, status, text } = await httpRequest(
+    `${MARVIN_API_BASE}/children?parentId=${encodeURIComponent(parentId)}`,
+    "GET",
+    marvinHeaders()
+  );
+
+  if (!Array.isArray(json)) {
+    throw new Error(`Error getting Marvin children. status=${status}, text=${text}`);
+  }
+
+  return json;
+}
+
+async function createMarvinCategory(folderName) {
+  const now = Date.now();
+  const body = {
+    _id: getManagedCategoryId(folderName),
+    db: "Categories",
+    type: "category",
+    title: folderName,
+    parentId: "root",
+    note: getManagedCategoryNote(folderName),
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const result = await httpRequest(
+    `${MARVIN_API_BASE}/doc/create`,
     "POST",
-    ttJsonHeaders(token),
-    JSON.stringify({ name })
+    marvinFullHeaders(),
+    body
   );
-  return json?.id ? json : null;
+
+  if (!result.ok) {
+    throw new Error(
+      `Marvin category create failed. status=${result.status}, text=${result.text}, json=${JSON.stringify(result.json)}`
+    );
+  }
+
+  return body;
 }
 
+async function updateMarvinCategory(categoryId, folderName) {
+  const now = Date.now();
 
-async function deleteTickTickProject(projectId, token) {
-  const { ok, status } = await httpRequest(
-    `https://api.ticktick.com/open/v1/project/${projectId}`,
-    "DELETE",
-    ttHeaders(token)
+  const result = await httpRequest(
+    `${MARVIN_API_BASE}/doc/update`,
+    "POST",
+    marvinFullHeaders(),
+    {
+      itemId: categoryId,
+      setters: [
+        { key: "title", val: folderName },
+        { key: "fieldUpdates.title", val: now },
+        { key: "note", val: getManagedCategoryNote(folderName) },
+        { key: "fieldUpdates.note", val: now },
+        { key: "parentId", val: "root" },
+        { key: "fieldUpdates.parentId", val: now },
+        { key: "updatedAt", val: now },
+      ],
+    }
   );
-  return ok;
+
+  if (!result.ok) {
+    throw new Error(
+      `Marvin category update failed. status=${result.status}, text=${result.text}, json=${JSON.stringify(result.json)}`
+    );
+  }
+
+  return true;
 }
+
+async function createMarvinProject(hotSpotProject, categoryId) {
+  const now = Date.now();
+  const body = {
+    _id: getManagedProjectId(hotSpotProject.guid),
+    db: "Categories",
+    type: "project",
+    title: hotSpotProject.name,
+    parentId: categoryId,
+    note: getManagedProjectNote(hotSpotProject.guid),
+    day: null,
+    done: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const result = await httpRequest(
+    `${MARVIN_API_BASE}/doc/create`,
+    "POST",
+    marvinFullHeaders(),
+    body
+  );
+
+  if (!result.ok) {
+    throw new Error(
+      `Marvin project create failed. status=${result.status}, text=${result.text}, json=${JSON.stringify(result.json)}`
+    );
+  }
+
+  return body;
+}
+
+async function updateMarvinProject(itemId, hotSpotProject, categoryId) {
+  const now = Date.now();
+
+  const result = await httpRequest(
+    `${MARVIN_API_BASE}/doc/update`,
+    "POST",
+    marvinFullHeaders(),
+    {
+      itemId,
+      setters: [
+        { key: "title", val: hotSpotProject.name },
+        { key: "fieldUpdates.title", val: now },
+        { key: "parentId", val: categoryId },
+        { key: "fieldUpdates.parentId", val: now },
+        { key: "note", val: getManagedProjectNote(hotSpotProject.guid) },
+        { key: "fieldUpdates.note", val: now },
+        { key: "updatedAt", val: now },
+      ],
+    }
+  );
+
+  if (!result.ok) {
+    throw new Error(
+      `Marvin project update failed. status=${result.status}, text=${result.text}, json=${JSON.stringify(result.json)}`
+    );
+  }
+
+  return true;
+}
+
+async function deleteMarvinItem(itemId) {
+  const result = await httpRequest(
+    `${MARVIN_API_BASE}/doc/delete`,
+    "POST",
+    marvinFullHeaders(),
+    { itemId }
+  );
+
+  if (!result.ok) {
+    throw new Error(
+      `Marvin delete failed. status=${result.status}, text=${result.text}, json=${JSON.stringify(result.json)}`
+    );
+  }
+
+  return true;
+}
+
+async function ensureManagedMarvinCategories() {
+  const existingCategories = await fetchMarvinCategories();
+  const categoryMap = new Map();
+
+  for (const folderName of Object.values(HOT_SPOT_FOLDERS)) {
+    const managedNote = getManagedCategoryNote(folderName);
+
+    let category =
+      existingCategories.find(c => c.note === managedNote) ||
+      existingCategories.find(c => c._id === getManagedCategoryId(folderName)) ||
+      existingCategories.find(c => c.title === folderName && c.parentId === "root");
+
+    if (!category) {
+      console.log(`  ➕ Creating Marvin category: "${folderName}"`);
+      category = await createMarvinCategory(folderName);
+      console.log(`    ✅ Created`);
+    } else {
+      await updateMarvinCategory(category._id, folderName);
+      console.log(`  ⏭ Category ready: "${folderName}"`);
+    }
+
+    categoryMap.set(folderName, {
+      _id: category._id || getManagedCategoryId(folderName),
+      title: folderName,
+    });
+  }
+
+  return categoryMap;
+}
+
+async function syncAmazingMarvinProjects(hotSpotProjects) {
+  console.log("\n📋 Synchronization Amazing Marvin...");
+  console.log(`  🎯 Types for synchronization: ${hotSpotProjects.length}`);
+
+  if (!CONFIG.MARVIN_API_TOKEN) {
+    throw new Error("MARVIN_API_TOKEN is empty");
+  }
+  if (!CONFIG.MARVIN_FULL_ACCESS_TOKEN) {
+    throw new Error("MARVIN_FULL_ACCESS_TOKEN is empty");
+  }
+
+  const categoriesByFolder = await ensureManagedMarvinCategories();
+
+  const existingManagedProjects = [];
+  for (const folderName of Object.values(HOT_SPOT_FOLDERS)) {
+    const categoryId = categoriesByFolder.get(folderName)._id;
+    const children = await fetchMarvinChildren(categoryId);
+
+    existingManagedProjects.push(
+      ...children.filter(item => item.type === "project")
+    );
+  }
+
+  const existingByGuid = new Map();
+  for (const item of existingManagedProjects) {
+    const guid = parseManagedProjectGuid(item);
+    if (guid) existingByGuid.set(guid, item);
+  }
+
+  const desiredGuids = new Set();
+
+  for (const hotSpotProject of hotSpotProjects) {
+    if (!hotSpotProject.guid || !hotSpotProject.name || !hotSpotProject.parentFolder) continue;
+
+    desiredGuids.add(hotSpotProject.guid);
+
+    const category = categoriesByFolder.get(hotSpotProject.parentFolder);
+    if (!category?._id) {
+      console.log(`  ❌ Missing Marvin category for "${hotSpotProject.parentFolder}"`);
+      continue;
+    }
+
+    const existing = existingByGuid.get(hotSpotProject.guid);
+
+    if (!existing) {
+      console.log(`  ➕ Creating project: "${hotSpotProject.name}" → "${hotSpotProject.parentFolder}"`);
+      await createMarvinProject(hotSpotProject, category._id);
+      console.log(`    ✅ Created`);
+      continue;
+    }
+
+    const shouldUpdate =
+      existing.title !== hotSpotProject.name ||
+      existing.parentId !== category._id ||
+      (existing.note || "") !== getManagedProjectNote(hotSpotProject.guid);
+
+    if (shouldUpdate) {
+      console.log(`  ✏ Updating project: "${existing.title}" → "${hotSpotProject.name}"`);
+      await updateMarvinProject(existing._id, hotSpotProject, category._id);
+      console.log(`    ✅ Updated`);
+    } else {
+      console.log(`  ⏭ Already exists: "${hotSpotProject.name}"`);
+    }
+  }
+
+  for (const item of existingManagedProjects) {
+    const guid = parseManagedProjectGuid(item);
+    if (!guid) continue;
+    if (desiredGuids.has(guid)) continue;
+
+    console.log(`  🗑 Deleting obsolete Marvin project: "${item.title}"`);
+    await deleteMarvinItem(item._id);
+    console.log(`    ✅ Deleted`);
+  }
+}
+
 
 // MAIN FUNCTION
 
@@ -618,7 +946,7 @@ async function main() {
     }
 
     const obsidianFolderPath = hotSpotProject.path + "/" + hotSpotProject.name;
-    
+
     const isFolderExists = await folderExists(obsidianFolderPath);
     
     if (isFolderExists) {
@@ -655,72 +983,78 @@ async function main() {
     }
   }
 
-  // 4. Create TickTick lists
-  console.log("\n📋 Synchronization TickTick...");
-  console.log(`  🎯 Types for synchronization: ${hotSpotProjects.length}`);
+  try {
+    await syncAmazingMarvinProjects(hotSpotProjects);
+  } catch (e) {
+    throw new Error("Error sync Amazing Marvin: " + e.message);
+  }
+
+  // // 4. Create TickTick lists
+  // console.log("\n📋 Synchronization TickTick...");
+  // console.log(`  🎯 Types for synchronization: ${hotSpotProjects.length}`);
   
-  if (hotSpotProjects.length === 0) {
-    console.log("  ⚠ No types for synchronization — skip");
-  }
+  // if (hotSpotProjects.length === 0) {
+  //   console.log("  ⚠ No types for synchronization — skip");
+  // }
 
-  let token;
-  try {
-    token = await getTickTickToken();
-  } catch(e) {
-    throw new Error("Error authorization TickTick: " + e.message);
-  }
+  // let token;
+  // try {
+  //   token = await getTickTickToken();
+  // } catch(e) {
+  //   throw new Error("Error authorization TickTick: " + e.message);
+  // }
 
-  let projects;
-  try {
-    projects = await fetchTickTickProjects(token);
-  } catch(e) {
-    throw new Error(e.message);
-  }
-  console.log(`  📂 Projects in TickTick: ${projects.length}`);
+  // let projects;
+  // try {
+  //   projects = await fetchTickTickProjects(token);
+  // } catch(e) {
+  //   throw new Error(e.message);
+  // }
+  // console.log(`  📂 Projects in TickTick: ${projects.length}`);
 
-  // Map of projects: name → object
-  const projectMap = new Map(projects.map(p => [p.name, p]));
+  // // Map of projects: name → object
+  // const projectMap = new Map(projects.map(p => [p.name, p]));
 
-  // Create projects for new types
-  for (const hotSpotProject of hotSpotProjects) {
-    if (!hotSpotProject.name) continue;
+  // // Create projects for new types
+  // for (const hotSpotProject of hotSpotProjects) {
+  //   if (!hotSpotProject.name) continue;
 
-    if (projectMap.has(hotSpotProject.name)) {
-      console.log(`  ⏭ Already exists: "${hotSpotProject.name}"`);
-    } else {
-      console.log(`  ➕ Creating: "${hotSpotProject.name}"`);
-      const created = await createTickTickProject(hotSpotProject.name, token);
-      if (created) {
-        projectMap.set(hotSpotProject.name, created);
-        console.log(`    ✅ Created`);
-      } else {
-        console.log(`    ❌ Error creating`);
-      }
-    }
-  }
+  //   if (projectMap.has(hotSpotProject.name)) {
+  //     console.log(`  ⏭ Already exists: "${hotSpotProject.name}"`);
+  //   } else {
+  //     console.log(`  ➕ Creating: "${hotSpotProject.name}"`);
+  //     const created = await createTickTickProject(hotSpotProject.name, token);
+  //     if (created) {
+  //       projectMap.set(hotSpotProject.name, created);
+  //       console.log(`    ✅ Created`);
+  //     } else {
+  //       console.log(`    ❌ Error creating`);
+  //     }
+  //   }
+  // }
 
-  // Process projects without corresponding type
-  for (const project of projects) {
-    const name = project.name;
+  // // Process projects without corresponding type
+  // for (const project of projects) {
+  //   const name = project.name;
 
-    // Protected lists — do not touch
-    // if (name.startsWith("!")) {
-    //   console.log(`  🔒 Защищён: "${name}"`);
-    //   continue;
-    // }
+  //   // Protected lists — do not touch
+  //   // if (name.startsWith("!")) {
+  //   //   console.log(`  🔒 Защищён: "${name}"`);
+  //   //   continue;
+  //   // }
 
-    // List is up to date — skip
-    if (hotSpotProjects.some(project => project.name === name)) continue;
+  //   // List is up to date — skip
+  //   if (hotSpotProjects.some(project => project.name === name)) continue;
 
-    // Type is missing in ATimeLogger — delete
-    console.log(`  🗑 Deleting: "${name}"`);
-    const deleted = await deleteTickTickProject(project.id, token);
-    if (deleted) {
-      console.log(`    ✅ Deleted`);
-    } else {
-      console.log(`    ❌ Error deleting`);
-    }
-  }
+  //   // Type is missing in ATimeLogger — delete
+  //   console.log(`  🗑 Deleting: "${name}"`);
+  //   const deleted = await deleteTickTickProject(project.id, token);
+  //   if (deleted) {
+  //     console.log(`    ✅ Deleted`);
+  //   } else {
+  //     console.log(`    ❌ Error deleting`);
+  //   }
+  // }
 }
 
 main().catch(async e => {
